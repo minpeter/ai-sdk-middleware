@@ -35,5 +35,5 @@ pnpm run build
 ## Release flow
 
 - Add a patch/minor/major changeset in `.changeset/*.md`
-- Push changes to `main` and let `Release Changeset` workflow open/update the version PR
+- Merge changes to `main` via a pull request, then let `Release Changeset` open/update the version PR
 - Merging the version PR publishes the package to npm automatically
