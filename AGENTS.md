@@ -59,3 +59,4 @@ import { extractReasoningMiddleware } from "@ai-sdk-tool/middleware/reasoning-pa
 - Standalone utilities (no internal dependencies)
 - Tests: `*.test.ts` colocated
 - Non-standard subpath exports: point to `.ts` files, not directories
+- Any change targeting `main` must go through a pull request first; direct pushes to `main` are forbidden.

@@ -31,3 +31,9 @@ pnpm run typecheck
 pnpm run test
 pnpm run build
 ```
+
+## Release flow
+
+- Add a patch/minor/major changeset in `.changeset/*.md`
+- Push changes to `main` and let `Release Changeset` workflow open/update the version PR
+- Merging the version PR publishes the package to npm automatically
