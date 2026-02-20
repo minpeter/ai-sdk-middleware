@@ -137,6 +137,10 @@ describe("getPotentialStartIndex", () => {
   it("returns null when searched text is empty", () => {
     expect(getPotentialStartIndex("abc", "")).toBeNull();
   });
+
+  it("returns null when there is no overlap", () => {
+    expect(getPotentialStartIndex("abc", "<think>")).toBeNull();
+  });
 });
 
 describe("extractReasoningMiddleware wrapGenerate", () => {
@@ -151,6 +155,40 @@ describe("extractReasoningMiddleware wrapGenerate", () => {
     ]);
 
     expect(result.content).toEqual([{ type: "text", text: "plain response" }]);
+  });
+
+  it("keeps non-text parts and transforms text parts only", async () => {
+    const middleware = extractReasoningMiddleware({
+      openingTag: "<think>",
+      closingTag: "</think>",
+      separator: "",
+    });
+
+    const result = await runWrapGenerate(middleware, [
+      { type: "reasoning", text: "existing" },
+      { type: "text", text: "A<think>why</think>B" },
+    ]);
+
+    expect(result.content).toEqual([
+      { type: "reasoning", text: "existing" },
+      { type: "reasoning", text: "why" },
+      { type: "text", text: "AB" },
+    ]);
+  });
+
+  it("keeps text unchanged when opening tag is not closed", async () => {
+    const middleware = extractReasoningMiddleware({
+      openingTag: "<think>",
+      closingTag: "</think>",
+    });
+
+    const result = await runWrapGenerate(middleware, [
+      { type: "text", text: "prefix<think>unfinished" },
+    ]);
+
+    expect(result.content).toEqual([
+      { type: "text", text: "prefix<think>unfinished" },
+    ]);
   });
 
   it("extracts reasoning blocks and keeps text with separator", async () => {
@@ -192,6 +230,57 @@ describe("extractReasoningMiddleware wrapGenerate", () => {
 });
 
 describe("extractReasoningMiddleware wrapStream", () => {
+  it("passes through stream chunks unchanged when tags are missing", async () => {
+    const middleware = extractReasoningMiddleware({
+      openingTag: "<think>",
+      closingTag: "</think>",
+    });
+
+    const input = [
+      { type: "stream-start", warnings: [] },
+      { type: "text-delta", id: "t1", delta: "plain response" },
+      {
+        type: "finish",
+        usage: createUsage(),
+        finishReason: { unified: "stop", raw: "stop" },
+      },
+    ] as LanguageModelV3StreamPart[];
+
+    const output = await runWrapStream(middleware, input);
+
+    expect(output[0]).toEqual({ type: "stream-start", warnings: [] });
+    expect(output).toContainEqual({
+      type: "text-delta",
+      id: "t1",
+      delta: "plain response",
+    });
+    expect(output).toContainEqual({
+      type: "finish",
+      usage: createUsage(),
+      finishReason: { unified: "stop", raw: "stop" },
+    });
+
+    const reasoningStarts = output.filter(
+      (
+        part
+      ): part is Extract<
+        LanguageModelV3StreamPart,
+        { type: "reasoning-start" }
+      > => part.type === "reasoning-start"
+    );
+    const reasoningDeltas = output.filter(
+      (
+        part
+      ): part is Extract<
+        LanguageModelV3StreamPart,
+        { type: "reasoning-delta" }
+      > => part.type === "reasoning-delta"
+    );
+
+    expect(reasoningStarts).toHaveLength(1);
+    expect(reasoningDeltas).toHaveLength(0);
+  });
+
   it("extracts reasoning across split tag chunks and preserves non-text parts", async () => {
     const middleware = extractReasoningMiddleware({
       openingTag: "<think>",
