@@ -1,5 +1,11 @@
 # @ai-sdk-tool/middleware
 
+## 0.0.4
+
+### Patch Changes
+
+- d9d37e3: Update release documentation in README and add repository policy that all changes targeting main must be merged through a pull request.
+
 ## 0.0.3
 
 ### Patch Changes
