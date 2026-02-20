@@ -1,0 +1,52 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# Dependencies
+node_modules
+.pnp
+.pnp.js
+
+# Local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Testing
+coverage
+
+# Vercel
+.vercel
+
+# Build Outputs
+.next/
+out/
+build
+dist
+tsconfig.tsbuildinfo
+
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+**/*.log
+
+# Misc
+.DS_Store
+*.pem
+
+# Benchmark results (keep history.jsonl and README.md)
+.benchmark-results/*
+!.benchmark-results/history.jsonl
+!.benchmark-results/.gitkeep
+!.benchmark-results/README.md
+
+# Benchmark API cache (never commit, cached in CI)
+.benchmark-results/cache/
+
+# ai agent tool
+.opencode
+.sisyphus
+__pycache__
