@@ -8,8 +8,8 @@ import type {
 type SystemPromptPlacement = "first" | "last";
 
 interface DefaultSystemPromptMiddlewareOptions {
-  systemPrompt: string;
   placement?: SystemPromptPlacement;
+  systemPrompt: string;
 }
 
 function extractSystemText(content: unknown): string | undefined {

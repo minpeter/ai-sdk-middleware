@@ -136,12 +136,12 @@ export function extractReasoningMiddleware({
       const { stream, ...rest } = await doStream();
 
       interface ExtractionState {
-        isFirstReasoning: boolean;
-        isFirstText: boolean;
         afterSwitch: boolean;
-        isReasoning: boolean;
         buffer: string;
         idCounter: number;
+        isFirstReasoning: boolean;
+        isFirstText: boolean;
+        isReasoning: boolean;
         textId: string;
       }
 

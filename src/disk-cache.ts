@@ -17,28 +17,28 @@ declare const __PACKAGE_VERSION__: string;
 
 export interface DiskCacheMiddlewareOptions {
   cacheDir?: string;
+  debug?: boolean;
   enabled?: boolean;
   forceRefresh?: boolean;
   generateKey?: (modelId: string, params: unknown) => string;
-  debug?: boolean;
 }
 
 interface CachedGenerateResult {
-  type: "generate";
   content: unknown;
   finishReason: unknown;
-  usage: unknown;
-  warnings: unknown;
-  response: unknown;
   providerMetadata: unknown;
   request: unknown;
+  response: unknown;
+  type: "generate";
+  usage: unknown;
+  warnings: unknown;
 }
 
 interface CachedStreamResult {
-  type: "stream";
   parts: LanguageModelV3StreamPart[];
-  response: unknown;
   request: unknown;
+  response: unknown;
+  type: "stream";
 }
 
 type CachedResult = CachedGenerateResult | CachedStreamResult;
