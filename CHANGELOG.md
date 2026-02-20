@@ -1,5 +1,11 @@
 # @ai-sdk-tool/middleware
 
+## 0.0.3
+
+### Patch Changes
+
+- fba3bf1: Prepare the first standalone release after repository split and strengthen middleware test coverage for cache, reasoning extraction, and system prompt edge cases.
+
 ## 0.0.2
 
 ### Patch Changes
