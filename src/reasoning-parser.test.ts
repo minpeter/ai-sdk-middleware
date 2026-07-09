@@ -1,11 +1,11 @@
 import type {
-  LanguageModelV3,
-  LanguageModelV3CallOptions,
-  LanguageModelV3Content,
-  LanguageModelV3GenerateResult,
-  LanguageModelV3StreamPart,
-  LanguageModelV3StreamResult,
-  LanguageModelV3Usage,
+  LanguageModelV4,
+  LanguageModelV4CallOptions,
+  LanguageModelV4Content,
+  LanguageModelV4GenerateResult,
+  LanguageModelV4StreamPart,
+  LanguageModelV4StreamResult,
+  LanguageModelV4Usage,
 } from "@ai-sdk/provider";
 import { describe, expect, it } from "vitest";
 
@@ -14,8 +14,8 @@ import {
   getPotentialStartIndex,
 } from "./reasoning-parser";
 
-const TEST_MODEL: LanguageModelV3 = {
-  specificationVersion: "v3",
+const TEST_MODEL: LanguageModelV4 = {
+  specificationVersion: "v4",
   provider: "test-provider",
   modelId: "test-model",
   supportedUrls: {},
@@ -23,11 +23,11 @@ const TEST_MODEL: LanguageModelV3 = {
   doStream: async () => createStreamResult([]),
 };
 
-const TEST_PARAMS: LanguageModelV3CallOptions = {
+const TEST_PARAMS: LanguageModelV4CallOptions = {
   prompt: [{ role: "user", content: [{ type: "text", text: "hello" }] }],
 };
 
-function createUsage(): LanguageModelV3Usage {
+function createUsage(): LanguageModelV4Usage {
   return {
     inputTokens: {
       total: 1,
@@ -44,8 +44,8 @@ function createUsage(): LanguageModelV3Usage {
 }
 
 function createGenerateResult(
-  content: LanguageModelV3Content[]
-): LanguageModelV3GenerateResult {
+  content: LanguageModelV4Content[]
+): LanguageModelV4GenerateResult {
   return {
     content,
     finishReason: {
@@ -58,10 +58,10 @@ function createGenerateResult(
 }
 
 function createStreamResult(
-  parts: LanguageModelV3StreamPart[]
-): LanguageModelV3StreamResult {
+  parts: LanguageModelV4StreamPart[]
+): LanguageModelV4StreamResult {
   return {
-    stream: new ReadableStream<LanguageModelV3StreamPart>({
+    stream: new ReadableStream<LanguageModelV4StreamPart>({
       start(controller) {
         for (const part of parts) {
           controller.enqueue(part);
@@ -73,9 +73,9 @@ function createStreamResult(
 }
 
 async function collectParts(
-  stream: ReadableStream<LanguageModelV3StreamPart>
-): Promise<LanguageModelV3StreamPart[]> {
-  const parts: LanguageModelV3StreamPart[] = [];
+  stream: ReadableStream<LanguageModelV4StreamPart>
+): Promise<LanguageModelV4StreamPart[]> {
+  const parts: LanguageModelV4StreamPart[] = [];
   const reader = stream.getReader();
 
   while (true) {
@@ -91,8 +91,8 @@ async function collectParts(
 
 async function runWrapGenerate(
   middleware: ReturnType<typeof extractReasoningMiddleware>,
-  content: LanguageModelV3Content[]
-): Promise<LanguageModelV3GenerateResult> {
+  content: LanguageModelV4Content[]
+): Promise<LanguageModelV4GenerateResult> {
   const wrapGenerate = middleware.wrapGenerate;
   if (!wrapGenerate) {
     throw new Error("wrapGenerate is undefined");
@@ -108,8 +108,8 @@ async function runWrapGenerate(
 
 async function runWrapStream(
   middleware: ReturnType<typeof extractReasoningMiddleware>,
-  inputParts: LanguageModelV3StreamPart[]
-): Promise<LanguageModelV3StreamPart[]> {
+  inputParts: LanguageModelV4StreamPart[]
+): Promise<LanguageModelV4StreamPart[]> {
   const wrapStream = middleware.wrapStream;
   if (!wrapStream) {
     throw new Error("wrapStream is undefined");
@@ -244,7 +244,7 @@ describe("extractReasoningMiddleware wrapStream", () => {
         usage: createUsage(),
         finishReason: { unified: "stop", raw: "stop" },
       },
-    ] as LanguageModelV3StreamPart[];
+    ] as LanguageModelV4StreamPart[];
 
     const output = await runWrapStream(middleware, input);
 
@@ -264,7 +264,7 @@ describe("extractReasoningMiddleware wrapStream", () => {
       (
         part
       ): part is Extract<
-        LanguageModelV3StreamPart,
+        LanguageModelV4StreamPart,
         { type: "reasoning-start" }
       > => part.type === "reasoning-start"
     );
@@ -272,12 +272,12 @@ describe("extractReasoningMiddleware wrapStream", () => {
       (
         part
       ): part is Extract<
-        LanguageModelV3StreamPart,
+        LanguageModelV4StreamPart,
         { type: "reasoning-delta" }
       > => part.type === "reasoning-delta"
     );
 
-    expect(reasoningStarts).toHaveLength(1);
+    expect(reasoningStarts).toHaveLength(0);
     expect(reasoningDeltas).toHaveLength(0);
   });
 
@@ -380,14 +380,14 @@ describe("extractReasoningMiddleware wrapStream", () => {
       (
         part
       ): part is Extract<
-        LanguageModelV3StreamPart,
+        LanguageModelV4StreamPart,
         { type: "reasoning-delta" }
       > => part.type === "reasoning-delta"
     );
     const textDeltas = output.filter(
       (
         part
-      ): part is Extract<LanguageModelV3StreamPart, { type: "text-delta" }> =>
+      ): part is Extract<LanguageModelV4StreamPart, { type: "text-delta" }> =>
         part.type === "text-delta"
     );
 
@@ -401,6 +401,30 @@ describe("extractReasoningMiddleware wrapStream", () => {
       type: "text-delta",
       id: "b",
       delta: "B",
+    });
+  });
+
+  it("delays text-start until first non-reasoning text delta", async () => {
+    const middleware = extractReasoningMiddleware({
+      openingTag: "<think>",
+      closingTag: "</think>",
+    });
+
+    const output = await runWrapStream(middleware, [
+      { type: "text-start", id: "t1" },
+      { type: "text-delta", id: "t1", delta: "<think>why</think>answer" },
+      { type: "text-end", id: "t1" },
+    ]);
+
+    const types = output.map((part) => part.type);
+    expect(types.indexOf("reasoning-start")).toBeLessThan(
+      types.indexOf("text-start")
+    );
+    expect(output).toContainEqual({ type: "text-start", id: "t1" });
+    expect(output).toContainEqual({
+      type: "text-delta",
+      id: "t1",
+      delta: "answer",
     });
   });
 });

@@ -3,12 +3,13 @@
   "version": "0.0.3",
   "description": "Collection of reusable AI SDK middlewares",
   "type": "module",
+  "sideEffects": false,
   "repository": {
     "type": "git",
     "url": "https://github.com/minpeter/ai-sdk-middleware"
   },
   "main": "./dist/index.js",
-  "module": "./dist/index.mjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
@@ -25,6 +26,11 @@
       "types": "./dist/disk-cache.d.ts",
       "import": "./dist/disk-cache.js",
       "require": "./dist/disk-cache.cjs"
+    },
+    "./evlog": {
+      "types": "./dist/evlog.d.ts",
+      "import": "./dist/evlog.js",
+      "require": "./dist/evlog.cjs"
     }
   },
   "files": [
@@ -34,7 +40,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "pnpm clean && tsup --tsconfig tsconfig.build.json",
+    "build": "pnpm clean && tsup --tsconfig tsconfig.build.json && tsc -p tsconfig.build.json",
     "build:watch": "pnpm clean && tsup --watch --tsconfig tsconfig.build.json",
     "clean": "rm -rf dist *.tsbuildinfo",
     "typecheck": "tsc --noEmit",
@@ -49,28 +55,50 @@
     "ci:release": "pnpm build && changeset publish",
     "ci:version": "changeset version"
   },
-  "dependencies": {
-    "@ai-sdk/provider": "3.0.8"
+  "peerDependencies": {
+    "@ai-sdk/provider": "^4.0.0",
+    "ai": ">=7.0.0 <8.0.0",
+    "evlog": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ai": {
+      "optional": true
+    },
+    "evlog": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.3",
-    "@changesets/cli": "2.29.8",
-    "@types/node": "^25.3.0",
-    "@vitest/coverage-v8": "^4.0.18",
+    "@ai-sdk/provider": "4.0.2",
+    "@biomejs/biome": "2.5.3",
+    "@changesets/cli": "2.31.0",
+    "@types/node": "^26.1.1",
+    "@vitest/coverage-v8": "^4.1.10",
+    "ai": "7.0.18",
+    "evlog": "2.20.0",
     "tsup": "^8.5.1",
-    "typescript": "5.9.3",
-    "ultracite": "7.2.3",
-    "vitest": "^4.0.18"
+    "typescript": "7.0.2",
+    "ultracite": "7.9.3",
+    "vitest": "^4.1.10",
+    "zod": "^4.4.3"
   },
   "keywords": [
     "ai",
     "sdk",
-    "middleware"
+    "middleware",
+    "ai-sdk",
+    "language-model-v4",
+    "evlog"
   ],
   "author": "",
   "license": "Apache-2.0",
-  "packageManager": "pnpm@9.14.4",
+  "packageManager": "pnpm@10.32.1",
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
