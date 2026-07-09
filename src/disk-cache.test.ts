@@ -1,6 +1,10 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { LanguageModelV3StreamPart } from "@ai-sdk/provider";
+import type {
+  LanguageModelV4FinishReason,
+  LanguageModelV4StreamPart,
+  LanguageModelV4Usage,
+} from "@ai-sdk/provider";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearDiskCache,
@@ -18,10 +22,32 @@ function createMockParams(prompt: string) {
   return { prompt };
 }
 
+function createUsage(): LanguageModelV4Usage {
+  return {
+    inputTokens: {
+      total: 10,
+      noCache: 10,
+      cacheRead: 0,
+      cacheWrite: 0,
+    },
+    outputTokens: {
+      total: 5,
+      text: 5,
+      reasoning: 0,
+    },
+  };
+}
+
+function createFinishReason(
+  unified: LanguageModelV4FinishReason["unified"]
+): LanguageModelV4FinishReason {
+  return { unified, raw: unified };
+}
+
 async function collectStream(
-  stream: ReadableStream<LanguageModelV3StreamPart>
+  stream: ReadableStream<LanguageModelV4StreamPart>
 ) {
-  const parts: LanguageModelV3StreamPart[] = [];
+  const parts: LanguageModelV4StreamPart[] = [];
   const reader = stream.getReader();
   while (true) {
     const { done, value } = await reader.read();
@@ -54,8 +80,8 @@ describe("createDiskCacheMiddleware", () => {
 
       const mockResult = {
         content: [{ type: "text" as const, text: "response" }],
-        finishReason: "stop" as const,
-        usage: { inputTokens: 10, outputTokens: 5 },
+        finishReason: createFinishReason("stop"),
+        usage: createUsage(),
         warnings: [],
         response: {},
         providerMetadata: {},
@@ -77,7 +103,7 @@ describe("createDiskCacheMiddleware", () => {
         doGenerate,
         params,
         model,
-      } as any);
+      } as never);
 
       expect(callCount).toBe(1);
       expect(result1.content).toEqual(mockResult.content);
@@ -86,7 +112,7 @@ describe("createDiskCacheMiddleware", () => {
         doGenerate,
         params,
         model,
-      } as any);
+      } as never);
 
       expect(callCount).toBe(1);
       expect(result2.content).toEqual(mockResult.content);
@@ -103,8 +129,8 @@ describe("createDiskCacheMiddleware", () => {
         callCount++;
         return Promise.resolve({
           content: [],
-          finishReason: "stop" as const,
-          usage: { inputTokens: 0, outputTokens: 0 },
+          finishReason: createFinishReason("stop"),
+          usage: createUsage(),
           warnings: [],
           response: {},
           providerMetadata: {},
@@ -122,13 +148,13 @@ describe("createDiskCacheMiddleware", () => {
         doGenerate,
         params: createMockParams("Hello"),
         model,
-      } as any);
+      } as never);
 
       await wrapGenerate({
         doGenerate,
         params: createMockParams("Goodbye"),
         model,
-      } as any);
+      } as never);
 
       expect(callCount).toBe(2);
     });
@@ -139,6 +165,7 @@ describe("createDiskCacheMiddleware", () => {
         enabled: false,
       });
 
+      expect(middleware.specificationVersion).toBe("v4");
       expect(middleware.wrapGenerate).toBeUndefined();
       expect(middleware.wrapStream).toBeUndefined();
     });
@@ -166,8 +193,8 @@ describe("createDiskCacheMiddleware", () => {
         callCount++;
         return Promise.resolve({
           content: [],
-          finishReason: "stop" as const,
-          usage: { inputTokens: 0, outputTokens: 0 },
+          finishReason: createFinishReason("stop"),
+          usage: createUsage(),
           warnings: [],
           response: {},
           providerMetadata: {},
@@ -185,13 +212,13 @@ describe("createDiskCacheMiddleware", () => {
         doGenerate,
         params: createMockParams("A"),
         model,
-      } as any);
+      } as never);
 
       await wrapGenerate({
         doGenerate,
         params: createMockParams("B"),
         model,
-      } as any);
+      } as never);
 
       expect(callCount).toBe(1);
     });
@@ -208,8 +235,8 @@ describe("createDiskCacheMiddleware", () => {
         callCount++;
         return Promise.resolve({
           content: [{ type: "text" as const, text: "error-response" }],
-          finishReason: "error" as const,
-          usage: { inputTokens: 0, outputTokens: 0 },
+          finishReason: createFinishReason("error"),
+          usage: createUsage(),
           warnings: [],
           response: {},
           providerMetadata: {},
@@ -227,13 +254,13 @@ describe("createDiskCacheMiddleware", () => {
         doGenerate,
         params,
         model,
-      } as any);
+      } as never);
 
       await wrapGenerate({
         doGenerate,
         params,
         model,
-      } as any);
+      } as never);
 
       expect(callCount).toBe(2);
     });
@@ -257,8 +284,8 @@ describe("createDiskCacheMiddleware", () => {
         callCount++;
         return Promise.resolve({
           content: [{ type: "text" as const, text: "fresh" }],
-          finishReason: "stop" as const,
-          usage: { inputTokens: 1, outputTokens: 1 },
+          finishReason: createFinishReason("stop"),
+          usage: createUsage(),
           warnings: [],
           response: {},
           providerMetadata: {},
@@ -276,12 +303,12 @@ describe("createDiskCacheMiddleware", () => {
         doGenerate,
         params,
         model,
-      } as any);
+      } as never);
       const result2 = await wrapGenerate({
         doGenerate,
         params,
         model,
-      } as any);
+      } as never);
 
       expect(result1.content).toEqual(result2.content);
       expect(callCount).toBe(1);
@@ -303,8 +330,8 @@ describe("createDiskCacheMiddleware", () => {
         callCount++;
         return Promise.resolve({
           content: [{ type: "text" as const, text: `response-${callCount}` }],
-          finishReason: "stop" as const,
-          usage: { inputTokens: 0, outputTokens: 0 },
+          finishReason: createFinishReason("stop"),
+          usage: createUsage(),
           warnings: [],
           response: {},
           providerMetadata: {},
@@ -327,21 +354,21 @@ describe("createDiskCacheMiddleware", () => {
         doGenerate,
         params,
         model,
-      } as any);
+      } as never);
       expect(callCount).toBe(1);
 
       await wrapGenerate({
         doGenerate,
         params,
         model,
-      } as any);
+      } as never);
       expect(callCount).toBe(1);
 
       await wrapGenerateForce({
         doGenerate,
         params,
         model,
-      } as any);
+      } as never);
       expect(callCount).toBe(2);
     });
 
@@ -357,8 +384,8 @@ describe("createDiskCacheMiddleware", () => {
         callCount++;
         return Promise.resolve({
           content: [],
-          finishReason: "stop" as const,
-          usage: { inputTokens: 0, outputTokens: 0 },
+          finishReason: createFinishReason("stop"),
+          usage: createUsage(),
           warnings: [],
           response: {},
           providerMetadata: {},
@@ -376,14 +403,14 @@ describe("createDiskCacheMiddleware", () => {
         doGenerate,
         params,
         model,
-      } as any);
+      } as never);
       expect(callCount).toBe(1);
 
       await wrapGenerate({
         doGenerate,
         params,
         model,
-      } as any);
+      } as never);
       expect(callCount).toBe(1);
 
       vi.stubEnv("AI_CACHE_FORCE_REFRESH", "true");
@@ -400,7 +427,7 @@ describe("createDiskCacheMiddleware", () => {
         doGenerate,
         params,
         model,
-      } as any);
+      } as never);
       expect(callCount).toBe(2);
     });
   });
@@ -421,15 +448,15 @@ describe("createDiskCacheMiddleware", () => {
         { type: "text-end", id: "t1" },
         {
           type: "finish",
-          finishReason: "stop",
-          usage: { inputTokens: 10, outputTokens: 5 },
+          finishReason: createFinishReason("stop"),
+          usage: createUsage(),
         },
-      ] as LanguageModelV3StreamPart[];
+      ] as LanguageModelV4StreamPart[];
 
       const doStream = () => {
         callCount++;
         return Promise.resolve({
-          stream: new ReadableStream<LanguageModelV3StreamPart>({
+          stream: new ReadableStream<LanguageModelV4StreamPart>({
             start(controller) {
               for (const part of mockParts) {
                 controller.enqueue(part);
@@ -452,19 +479,19 @@ describe("createDiskCacheMiddleware", () => {
         doStream,
         params,
         model,
-      } as any);
+      } as never);
       const parts1 = await collectStream(result1.stream);
 
       expect(callCount).toBe(1);
       expect(parts1).toHaveLength(5);
 
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((r) => setTimeout(r, 50));
 
       const result2 = await wrapStream({
         doStream,
         params,
         model,
-      } as any);
+      } as never);
       const parts2 = await collectStream(result2.stream);
 
       expect(callCount).toBe(1);
@@ -485,15 +512,15 @@ describe("createDiskCacheMiddleware", () => {
         { type: "text-end", id: "t1" },
         {
           type: "finish",
-          finishReason: "error",
-          usage: { inputTokens: 1, outputTokens: 1 },
+          finishReason: createFinishReason("error"),
+          usage: createUsage(),
         },
-      ] as LanguageModelV3StreamPart[];
+      ] as LanguageModelV4StreamPart[];
 
       const doStream = () => {
         callCount++;
         return Promise.resolve({
-          stream: new ReadableStream<LanguageModelV3StreamPart>({
+          stream: new ReadableStream<LanguageModelV4StreamPart>({
             start(controller) {
               for (const part of mockParts) {
                 controller.enqueue(part);
@@ -516,14 +543,14 @@ describe("createDiskCacheMiddleware", () => {
         doStream,
         params,
         model,
-      } as any);
+      } as never);
       const parts1 = await collectStream(result1.stream);
 
       const result2 = await wrapStream({
         doStream,
         params,
         model,
-      } as any);
+      } as never);
       const parts2 = await collectStream(result2.stream);
 
       expect(parts1).toEqual(parts2);

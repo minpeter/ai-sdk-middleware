@@ -9,8 +9,8 @@ import {
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type {
-  LanguageModelV3Middleware,
-  LanguageModelV3StreamPart,
+  LanguageModelV4Middleware,
+  LanguageModelV4StreamPart,
 } from "@ai-sdk/provider";
 
 declare const __PACKAGE_VERSION__: string;
@@ -35,7 +35,7 @@ interface CachedGenerateResult {
 }
 
 interface CachedStreamResult {
-  parts: LanguageModelV3StreamPart[];
+  parts: LanguageModelV4StreamPart[];
   request: unknown;
   response: unknown;
   type: "stream";
@@ -87,13 +87,13 @@ async function writeCache(
     await mkdir(dirname(cachePath), { recursive: true });
     await writeFile(cachePath, JSON.stringify(result), "utf-8");
   } catch {
-    // Silent fail
+    // Silent fail — cache write must not break generation
   }
 }
 
 function createStreamFromParts(
-  parts: LanguageModelV3StreamPart[]
-): ReadableStream<LanguageModelV3StreamPart> {
+  parts: LanguageModelV4StreamPart[]
+): ReadableStream<LanguageModelV4StreamPart> {
   let index = 0;
   return new ReadableStream({
     pull(controller) {
@@ -119,27 +119,27 @@ function isErrorFinishReason(finishReason: FinishReasonLike): boolean {
 
 export function createDiskCacheMiddleware(
   options: DiskCacheMiddlewareOptions = {}
-): LanguageModelV3Middleware {
+): LanguageModelV4Middleware {
   const generateKey = options.generateKey ?? defaultGenerateKey;
   const resolvedCacheDir = resolve(options.cacheDir ?? ".ai-cache");
 
   const envEnabled = process.env.AI_CACHE_ENABLED;
   const enabled =
-    envEnabled !== undefined
-      ? envEnabled.toLowerCase() === "true" || envEnabled === "1"
-      : (options.enabled ?? true);
+    envEnabled === undefined
+      ? (options.enabled ?? true)
+      : envEnabled.toLowerCase() === "true" || envEnabled === "1";
 
   const envDebug = process.env.AI_CACHE_DEBUG;
   const debug =
-    envDebug !== undefined
-      ? envDebug.toLowerCase() === "true" || envDebug === "1"
-      : (options.debug ?? false);
+    envDebug === undefined
+      ? (options.debug ?? false)
+      : envDebug.toLowerCase() === "true" || envDebug === "1";
 
   const envForceRefresh = process.env.AI_CACHE_FORCE_REFRESH;
   const forceRefresh =
-    envForceRefresh !== undefined
-      ? envForceRefresh.toLowerCase() === "true" || envForceRefresh === "1"
-      : (options.forceRefresh ?? false);
+    envForceRefresh === undefined
+      ? (options.forceRefresh ?? false)
+      : envForceRefresh.toLowerCase() === "true" || envForceRefresh === "1";
 
   const log = debug
     ? (msg: string, data?: unknown) =>
@@ -148,13 +148,13 @@ export function createDiskCacheMiddleware(
 
   if (!enabled) {
     return {
-      specificationVersion: "v3",
+      specificationVersion: "v4",
       transformParams: async ({ params }) => params,
     };
   }
 
   return {
-    specificationVersion: "v3",
+    specificationVersion: "v4",
 
     transformParams: async ({ params }) => params,
 
@@ -227,12 +227,12 @@ export function createDiskCacheMiddleware(
       );
       const result = await doStream();
 
-      const collectedParts: LanguageModelV3StreamPart[] = [];
+      const collectedParts: LanguageModelV4StreamPart[] = [];
 
       const cachedStream = result.stream.pipeThrough(
         new TransformStream<
-          LanguageModelV3StreamPart,
-          LanguageModelV3StreamPart
+          LanguageModelV4StreamPart,
+          LanguageModelV4StreamPart
         >({
           transform(chunk, controller) {
             collectedParts.push(chunk);

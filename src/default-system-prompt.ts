@@ -1,8 +1,7 @@
 import type {
-  LanguageModelV3CallOptions,
-  LanguageModelV3Content,
-  LanguageModelV3Middleware,
-  LanguageModelV3Prompt,
+  LanguageModelV4CallOptions,
+  LanguageModelV4Middleware,
+  LanguageModelV4Prompt,
 } from "@ai-sdk/provider";
 
 type SystemPromptPlacement = "first" | "last";
@@ -10,34 +9,6 @@ type SystemPromptPlacement = "first" | "last";
 interface DefaultSystemPromptMiddlewareOptions {
   placement?: SystemPromptPlacement;
   systemPrompt: string;
-}
-
-function extractSystemText(content: unknown): string | undefined {
-  if (typeof content === "string") {
-    return content;
-  }
-
-  if (!Array.isArray(content)) {
-    if (content == null) {
-      return;
-    }
-    return String(content);
-  }
-
-  const parts = (content as LanguageModelV3Content[]).map((part) => {
-    if (part?.type === "text" && "text" in part) {
-      return String(part.text ?? "");
-    }
-
-    return JSON.stringify(part);
-  });
-
-  const textParts = parts.filter((value) => value.length > 0);
-  if (textParts.length === 0) {
-    return;
-  }
-
-  return textParts.join("\n");
 }
 
 function mergeSystemPrompts({
@@ -63,8 +34,8 @@ function mergeSystemPrompts({
 }
 
 function ensurePromptArray(
-  prompt?: LanguageModelV3Prompt
-): LanguageModelV3Prompt {
+  prompt?: LanguageModelV4Prompt
+): LanguageModelV4Prompt {
   if (!prompt) {
     return [];
   }
@@ -75,9 +46,9 @@ function ensurePromptArray(
 export function defaultSystemPromptMiddleware({
   systemPrompt,
   placement = "first",
-}: DefaultSystemPromptMiddlewareOptions): LanguageModelV3Middleware {
+}: DefaultSystemPromptMiddlewareOptions): LanguageModelV4Middleware {
   return {
-    specificationVersion: "v3",
+    specificationVersion: "v4",
     transformParams: ({ params }) => {
       const prompt = ensurePromptArray(params.prompt);
       const systemIndex = prompt.findIndex(
@@ -85,54 +56,54 @@ export function defaultSystemPromptMiddleware({
       );
 
       if (systemIndex === -1) {
-        const promptWithSystem =
+        const promptWithSystem: LanguageModelV4Prompt =
           placement === "first"
-            ? ([
+            ? [
                 {
-                  role: "system" as const,
+                  role: "system",
                   content: systemPrompt,
                 },
                 ...prompt,
-              ] as LanguageModelV3Prompt)
-            : ([
+              ]
+            : [
                 ...prompt,
                 {
-                  role: "system" as const,
+                  role: "system",
                   content: systemPrompt,
                 },
-              ] as LanguageModelV3Prompt);
+              ];
 
-        const nextParams: LanguageModelV3CallOptions = {
+        const nextParams: LanguageModelV4CallOptions = {
           ...params,
           prompt: promptWithSystem,
         };
 
-        return Promise.resolve<LanguageModelV3CallOptions>(nextParams);
+        return Promise.resolve(nextParams);
       }
 
       const systemMessage = prompt[systemIndex];
-      const baseText = extractSystemText(systemMessage.content);
+      if (systemMessage.role !== "system") {
+        return Promise.resolve(params);
+      }
+
       const mergedContent = mergeSystemPrompts({
-        base: baseText,
+        base: systemMessage.content,
         addition: systemPrompt,
         placement,
       });
 
-      const updatedPrompt = prompt.map((message, index) =>
-        index === systemIndex
-          ? {
-              ...message,
-              content: mergedContent,
-            }
-          : message
-      ) as LanguageModelV3Prompt;
+      const updatedPrompt: LanguageModelV4Prompt = [...prompt];
+      updatedPrompt[systemIndex] = {
+        ...systemMessage,
+        content: mergedContent,
+      };
 
-      const nextParams: LanguageModelV3CallOptions = {
+      const nextParams: LanguageModelV4CallOptions = {
         ...params,
         prompt: updatedPrompt,
       };
 
-      return Promise.resolve<LanguageModelV3CallOptions>(nextParams);
+      return Promise.resolve(nextParams);
     },
   };
 }

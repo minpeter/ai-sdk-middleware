@@ -4,13 +4,49 @@
   "files": {
     "includes": ["!!.changeset"]
   },
+  "assist": {
+    "actions": {
+      "source": {
+        // Off: object-key sorting churns fixtures and reorders intentional API shapes.
+        "useSortedKeys": "off",
+        // Off: interface member order is domain-shaped, not alphabetical.
+        "useSortedInterfaceMembers": "off",
+        // Off: keep explicit import grouping (type vs value, local vs peer).
+        "organizeImports": "off"
+      }
+    }
+  },
   "linter": {
     "rules": {
-      "suspicious": {
-        "noConsole": "off"
+      "complexity": {
+        // Off: stream tag scanners are inherently branchy state machines.
+        "noExcessiveCognitiveComplexity": "off"
+      },
+      "correctness": {
+        // Off: while (true) + break is the intentional scan-loop form.
+        "noConstantCondition": "off"
+      },
+      "performance": {
+        // Off: stream readers collect chunks sequentially by design.
+        "noAwaitInLoops": "off"
       },
       "style": {
-        "noMagicNumbers": "off"
+        "noMagicNumbers": "off",
+        // Off: counter++ is clearer than reassignment in tight loops.
+        "noIncrementDecrement": "off",
+        // Off: stream/buffer code uses substring/slice interchangeably.
+        "noSubstr": "off",
+        // Off: destructuring every one-line property access is noise.
+        "useDestructuring": "off"
+      },
+      "suspicious": {
+        "noConsole": "off",
+        // Off: `== null` is the deliberate null-or-undefined idiom.
+        "noEqualsToNull": "off",
+        // Off: type-driven guards and while (true) scan loops.
+        "noUnnecessaryConditions": "off",
+        // Off: mock async stubs that throw do not need await.
+        "useAwait": "off"
       }
     }
   }

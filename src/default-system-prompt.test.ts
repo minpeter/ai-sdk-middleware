@@ -1,25 +1,39 @@
 import type {
-  LanguageModelV3CallOptions,
-  LanguageModelV3Prompt,
+  LanguageModelV4,
+  LanguageModelV4CallOptions,
+  LanguageModelV4Prompt,
 } from "@ai-sdk/provider";
 import { describe, expect, it } from "vitest";
 
 import { defaultSystemPromptMiddleware } from "./default-system-prompt";
 
+const TEST_MODEL: LanguageModelV4 = {
+  specificationVersion: "v4",
+  provider: "test-provider",
+  modelId: "test-model",
+  supportedUrls: {},
+  doGenerate: async () => {
+    throw new Error("not used");
+  },
+  doStream: async () => {
+    throw new Error("not used");
+  },
+};
+
 function callTransform(
   mw: ReturnType<typeof defaultSystemPromptMiddleware>,
-  prompt: LanguageModelV3Prompt
+  prompt: LanguageModelV4Prompt
 ) {
   const transform = mw.transformParams;
   if (!transform) {
     throw new Error("transformParams is undefined");
   }
 
-  type TransformArg = Parameters<NonNullable<typeof transform>>[0];
-
   return transform({
-    params: { prompt } as LanguageModelV3CallOptions,
-  } as TransformArg);
+    type: "generate",
+    params: { prompt } as LanguageModelV4CallOptions,
+    model: TEST_MODEL,
+  });
 }
 
 describe("defaultSystemPromptMiddleware placement", () => {
@@ -28,9 +42,9 @@ describe("defaultSystemPromptMiddleware placement", () => {
       systemPrompt: "SYS",
       placement: "first",
     });
-    const prompt = [
+    const prompt: LanguageModelV4Prompt = [
       { role: "user", content: [{ type: "text", text: "hello" }] },
-    ] as unknown as LanguageModelV3Prompt;
+    ];
     const out = await callTransform(mw, prompt);
     expect(out.prompt[0].role).toBe("system");
     expect(String(out.prompt[0].content)).toContain("SYS");
@@ -52,9 +66,9 @@ describe("defaultSystemPromptMiddleware placement", () => {
       systemPrompt: "SYS",
       placement: "last",
     });
-    const prompt = [
+    const prompt: LanguageModelV4Prompt = [
       { role: "user", content: [{ type: "text", text: "hello" }] },
-    ] as unknown as LanguageModelV3Prompt;
+    ];
     const out = await callTransform(mw, prompt);
     expect(out.prompt.at(-1)?.role).toBe("system");
     expect(String(out.prompt.at(-1)?.content)).toContain("SYS");
@@ -66,9 +80,9 @@ describe("defaultSystemPromptMiddleware placement", () => {
       placement: "first",
     });
 
-    const prompt = [
+    const prompt: LanguageModelV4Prompt = [
       { role: "user", content: [{ type: "text", text: "hello" }] },
-    ] as unknown as LanguageModelV3Prompt;
+    ];
     const snapshot = structuredClone(prompt);
 
     await callTransform(mw, prompt);
@@ -81,29 +95,10 @@ describe("defaultSystemPromptMiddleware placement", () => {
       systemPrompt: "ADD",
       placement: "first",
     });
-    const prompt = [
-      { role: "system", content: "BASE" },
-    ] as unknown as LanguageModelV3Prompt;
+    const prompt: LanguageModelV4Prompt = [{ role: "system", content: "BASE" }];
     const out = await callTransform(mw, prompt);
     const text = String(out.prompt[0].content);
     expect(text.startsWith("ADD\n\nBASE")).toBe(true);
-  });
-
-  it("first: merges array-based system content", async () => {
-    const mw = defaultSystemPromptMiddleware({
-      systemPrompt: "ADD",
-      placement: "first",
-    });
-    const prompt = [
-      {
-        role: "system",
-        content: [{ type: "text", text: "BASE" }],
-      },
-    ] as unknown as LanguageModelV3Prompt;
-
-    const out = await callTransform(mw, prompt);
-
-    expect(String(out.prompt[0].content)).toBe("ADD\n\nBASE");
   });
 
   it("last: merges after existing system content", async () => {
@@ -111,9 +106,7 @@ describe("defaultSystemPromptMiddleware placement", () => {
       systemPrompt: "ADD",
       placement: "last",
     });
-    const prompt = [
-      { role: "system", content: "BASE" },
-    ] as unknown as LanguageModelV3Prompt;
+    const prompt: LanguageModelV4Prompt = [{ role: "system", content: "BASE" }];
     const out = await callTransform(mw, prompt);
     const text = String(out.prompt[0].content);
     expect(text.endsWith("BASE\n\nADD")).toBe(true);
@@ -125,16 +118,23 @@ describe("defaultSystemPromptMiddleware placement", () => {
       placement: "last",
     });
 
-    const prompt = [
+    const prompt: LanguageModelV4Prompt = [
       { role: "system", content: "FIRST" },
       { role: "user", content: [{ type: "text", text: "hello" }] },
       { role: "system", content: "SECOND" },
-    ] as unknown as LanguageModelV3Prompt;
+    ];
 
     const out = await callTransform(mw, prompt);
 
     expect(String(out.prompt[0].content)).toBe("FIRST\n\nADD");
     expect(out.prompt[1].role).toBe("user");
     expect(String(out.prompt[2].content)).toBe("SECOND");
+  });
+
+  it("returns specificationVersion v4", () => {
+    const mw = defaultSystemPromptMiddleware({
+      systemPrompt: "SYS",
+    });
+    expect(mw.specificationVersion).toBe("v4");
   });
 });
