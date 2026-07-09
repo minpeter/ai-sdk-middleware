@@ -1,5 +1,5 @@
 ---
-"@ai-sdk-tool/middleware": major
+"@ai-sdk-tool/middleware": minor
 ---
 
 Target AI SDK v7 / LanguageModelV4 middleware.
