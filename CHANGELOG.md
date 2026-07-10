@@ -1,5 +1,11 @@
 # @ai-sdk-tool/middleware
 
+## 0.1.1
+
+### Patch Changes
+
+- fc9a0ca: Capture the model's final text as `ai.output` on the wide event and metadata snapshot (generate text parts and streamed text-delta).
+
 ## 0.1.0
 
 ### Minor Changes
