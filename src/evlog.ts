@@ -185,6 +185,12 @@ export interface AIEventData {
   totalDurationMs?: number
   embedding?: AIEmbeddingData
   estimatedCost?: number
+  /**
+   * Final model text output from the latest generate/stream call.
+   * Built from `text` content parts (generate) or concatenated `text-delta`
+   * chunks (stream). Overwritten on each successful model call.
+   */
+  output?: string
 }
 
 /**
@@ -507,6 +513,8 @@ interface AccumulatorState {
   lastMsToFinish: number | undefined
   lastError: string | undefined
   lastResponseId: string | undefined
+  /** Final text from the latest model call (generate content or stream deltas). */
+  lastOutput: string | undefined
   toolInputs: boolean
   toolInputsOptions: ToolInputsOptions | undefined
   toolExecutions: AIToolExecution[]
@@ -563,6 +571,7 @@ function createAccumulatorState(options?: AILoggerOptions): AccumulatorState {
     lastMsToFinish: undefined,
     lastError: undefined,
     lastResponseId: undefined,
+    lastOutput: undefined,
     toolInputs: enabled,
     toolInputsOptions: captureOpts,
     toolExecutions: [],
@@ -612,6 +621,7 @@ function buildMetadata(state: AccumulatorState, since: Watermarks = freshWaterma
   if (state.usage.reasoningTokens > 0) data.reasoningTokens = state.usage.reasoningTokens
   if (state.lastFinishReason) data.finishReason = state.lastFinishReason
   if (state.lastResponseId) data.responseId = state.lastResponseId
+  if (state.lastOutput !== undefined) data.output = state.lastOutput
   if (state.lastMsToFirstChunk !== undefined) data.msToFirstChunk = state.lastMsToFirstChunk
   if (state.lastMsToFinish !== undefined) {
     data.msToFinish = state.lastMsToFinish
@@ -701,6 +711,23 @@ function safeParseJSON(input: string): unknown {
   }
 }
 
+/**
+ * Join text content parts into a single final output string.
+ * Returns `undefined` when there is no text content.
+ */
+function extractTextOutput(
+  content: Array<{ type: string, text?: string }>,
+): string | undefined {
+  const parts: string[] = []
+  for (const item of content) {
+    if (item.type === 'text' && typeof item.text === 'string' && item.text.length > 0) {
+      parts.push(item.text)
+    }
+  }
+  if (parts.length === 0) return undefined
+  return parts.join('')
+}
+
 function recordError(log: RequestLogger, state: AccumulatorState, model: { provider: string, modelId: string }, error: unknown): void {
   state.calls++
   state.steps++
@@ -739,6 +766,11 @@ function buildMiddlewareFromState(log: RequestLogger, state: AccumulatorState): 
 
         if (result.response?.id) {
           state.lastResponseId = result.response.id
+        }
+
+        const textOutput = extractTextOutput(result.content)
+        if (textOutput !== undefined) {
+          state.lastOutput = textOutput
         }
 
         const stepToolCalls: string[] = []
@@ -783,6 +815,7 @@ function buildMiddlewareFromState(log: RequestLogger, state: AccumulatorState): 
       const streamToolCalls: string[] = []
       const streamToolInputBuffers = new Map<string, { name: string, chunks: string[] }>()
       let streamError: string | undefined
+      const streamTextChunks: string[] = []
 
       let doStreamResult: Awaited<ReturnType<typeof doStream>>
       try {
@@ -801,6 +834,10 @@ function buildMiddlewareFromState(log: RequestLogger, state: AccumulatorState): 
         transform(chunk, controller) {
           if (!firstChunkTime && chunk.type === 'text-delta') {
             firstChunkTime = Date.now()
+          }
+
+          if (chunk.type === 'text-delta') {
+            streamTextChunks.push(chunk.delta)
           }
 
           if (chunk.type === 'tool-input-start') {
@@ -879,6 +916,10 @@ function buildMiddlewareFromState(log: RequestLogger, state: AccumulatorState): 
           state.lastMsToFinish = Date.now() - streamStart
 
           if (streamError) state.lastError = streamError
+
+          if (streamTextChunks.length > 0) {
+            state.lastOutput = streamTextChunks.join('')
+          }
 
           const resolvedModel = resolveProviderAndModel(model.provider, streamModelId ?? model.modelId)
           state.stepsUsage.push({

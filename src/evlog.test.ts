@@ -274,6 +274,46 @@ describe('createAILogger', () => {
       expect(aiData.finishReason).toBe('stop')
     })
 
+    it('captures final text content as ai.output', async () => {
+      const log = createMockLogger()
+      const ai = createAILogger(log)
+      const model = createMockModel()
+      const wrappedModel = ai.wrap(model)
+
+      vi.mocked(model.doGenerate).mockResolvedValue(asGenerateResult({
+        content: [
+          { type: 'text', text: 'Hello ' },
+          { type: 'text', text: 'world' },
+        ],
+        finishReason: createFinishReason(),
+        usage: createMockUsage(),
+        response: { modelId: 'claude-sonnet-4.6' },
+      }))
+      await wrappedModel.doGenerate(createMockCallOptions())
+
+      const aiData = getLastAiData(log)
+      expect(aiData.output).toBe('Hello world')
+      expect(ai.getMetadata().output).toBe('Hello world')
+    })
+
+    it('omits ai.output when generate content has no text parts', async () => {
+      const log = createMockLogger()
+      const ai = createAILogger(log)
+      const model = createMockModel()
+      const wrappedModel = ai.wrap(model)
+
+      vi.mocked(model.doGenerate).mockResolvedValue(asGenerateResult({
+        content: [{ type: 'tool-call', toolCallId: 'tc1', toolName: 'search', input: '{}' }],
+        finishReason: createFinishReason('tool-calls'),
+        usage: createMockUsage(),
+        response: { modelId: 'claude-sonnet-4.6' },
+      }))
+      await wrappedModel.doGenerate(createMockCallOptions())
+
+      const aiData = getLastAiData(log)
+      expect(aiData.output).toBeUndefined()
+    })
+
     it('captures cache and reasoning token breakdown', async () => {
       const log = createMockLogger()
       const ai = createAILogger(log)
@@ -414,6 +454,33 @@ describe('createAILogger', () => {
       expect(aiData.outputTokens).toBe(150)
       expect(aiData.totalTokens).toBe(450)
       expect(aiData.finishReason).toBe('stop')
+      expect(aiData.output).toBe('Hello world')
+    })
+
+    it('concatenates stream text-delta chunks into ai.output', async () => {
+      const log = createMockLogger()
+      const ai = createAILogger(log)
+      const model = createMockModel()
+      const wrappedModel = ai.wrap(model)
+
+      vi.mocked(model.doStream).mockResolvedValue({
+        stream: makeReadableStream([
+          { type: 'text-delta', id: 't1', delta: 'Hel' },
+          { type: 'text-delta', id: 't1', delta: 'lo ' },
+          { type: 'text-delta', id: 't1', delta: 'stream' },
+          {
+            type: 'finish',
+            finishReason: createFinishReason(),
+            usage: createMockUsage(),
+          },
+        ]),
+      })
+
+      const result = await wrappedModel.doStream(createMockCallOptions())
+      await consumeStream(result.stream)
+
+      expect(getLastAiData(log).output).toBe('Hello stream')
+      expect(ai.getMetadata().output).toBe('Hello stream')
     })
 
     it('captures streaming metrics', async () => {
