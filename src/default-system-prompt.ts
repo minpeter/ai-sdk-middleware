@@ -81,11 +81,10 @@ export function defaultSystemPromptMiddleware({
         return Promise.resolve(nextParams);
       }
 
-      const systemMessage = prompt[systemIndex];
-      if (systemMessage.role !== "system") {
-        return Promise.resolve(params);
-      }
-
+      const systemMessage = prompt[systemIndex] as Extract<
+        LanguageModelV4Prompt[number],
+        { role: "system" }
+      >;
       const mergedContent = mergeSystemPrompts({
         base: systemMessage.content,
         addition: systemPrompt,

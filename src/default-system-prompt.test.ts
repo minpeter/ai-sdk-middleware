@@ -61,6 +61,14 @@ describe("defaultSystemPromptMiddleware placement", () => {
     expect(out.prompt).toEqual([{ role: "system", content: "SYS" }]);
   });
 
+  it("adds a system prompt when the defensive prompt input is undefined", async () => {
+    const mw = defaultSystemPromptMiddleware({ systemPrompt: "SYS" });
+
+    const out = await callTransform(mw, undefined as never);
+
+    expect(out.prompt).toEqual([{ role: "system", content: "SYS" }]);
+  });
+
   it("last: appends at end when missing system", async () => {
     const mw = defaultSystemPromptMiddleware({
       systemPrompt: "SYS",
@@ -129,6 +137,26 @@ describe("defaultSystemPromptMiddleware placement", () => {
     expect(String(out.prompt[0].content)).toBe("FIRST\n\nADD");
     expect(out.prompt[1].role).toBe("user");
     expect(String(out.prompt[2].content)).toBe("SECOND");
+  });
+
+  it("uses the addition when existing system content is empty", async () => {
+    const mw = defaultSystemPromptMiddleware({ systemPrompt: "ADD" });
+    const out = await callTransform(mw, [{ role: "system", content: "" }]);
+
+    expect(out.prompt).toEqual([{ role: "system", content: "ADD" }]);
+  });
+
+  it("keeps existing system content when the addition is empty", async () => {
+    const mw = defaultSystemPromptMiddleware({ systemPrompt: "" });
+    const prompt: LanguageModelV4Prompt = [{ role: "system", content: "BASE" }];
+    const snapshot = structuredClone(prompt);
+
+    const out = await callTransform(mw, prompt);
+
+    expect(out.prompt).toEqual(snapshot);
+    expect(prompt).toEqual(snapshot);
+    expect(out.prompt).not.toBe(prompt);
+    expect(out.prompt[0]).not.toBe(prompt[0]);
   });
 
   it("returns specificationVersion v4", () => {

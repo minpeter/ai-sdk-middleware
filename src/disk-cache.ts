@@ -15,6 +15,8 @@ import type {
 
 declare const __PACKAGE_VERSION__: string;
 
+const SHA256_KEY_PATTERN = /^[a-f0-9]{64}$/;
+
 export interface DiskCacheMiddlewareOptions {
   cacheDir?: string;
   debug?: boolean;
@@ -43,6 +45,25 @@ interface CachedStreamResult {
 
 type CachedResult = CachedGenerateResult | CachedStreamResult;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isCachedResult(value: unknown): value is CachedResult {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (value.type === "stream") {
+    return Array.isArray(value.parts);
+  }
+  return (
+    value.type === "generate" &&
+    Array.isArray(value.content) &&
+    isRecord(value.finishReason) &&
+    isRecord(value.usage)
+  );
+}
+
 function defaultGenerateKey(modelId: string, params: unknown): string {
   const serialized = JSON.stringify(
     { version: __PACKAGE_VERSION__, modelId, params },
@@ -63,10 +84,19 @@ function getCachePath(cacheDir: string, key: string): string {
   return join(cacheDir, key.slice(0, 2), `${key}.json`);
 }
 
+function normalizeCacheKey(key: string): string {
+  return SHA256_KEY_PATTERN.test(key)
+    ? key
+    : createHash("sha256").update(key).digest("hex");
+}
+
 async function readCache(cachePath: string): Promise<CachedResult | null> {
   try {
     const content = await readFile(cachePath, "utf-8");
-    const parsed = JSON.parse(content) as CachedResult;
+    const parsed: unknown = JSON.parse(content);
+    if (!isCachedResult(parsed)) {
+      return null;
+    }
     if (parsed.response && typeof parsed.response === "object") {
       const resp = parsed.response as Record<string, unknown>;
       if (typeof resp.timestamp === "string") {
@@ -146,6 +176,15 @@ export function createDiskCacheMiddleware(
         console.log(`[ai-cache] ${msg}`, data ?? "")
     : () => undefined;
 
+  function createCacheKey(modelId: string, params: unknown): string | null {
+    try {
+      return normalizeCacheKey(generateKey(modelId, params));
+    } catch (error) {
+      log("SKIP cache (key generation failed)", error);
+      return null;
+    }
+  }
+
   if (!enabled) {
     return {
       specificationVersion: "v4",
@@ -159,7 +198,10 @@ export function createDiskCacheMiddleware(
     transformParams: async ({ params }) => params,
 
     wrapGenerate: async ({ doGenerate, params, model }) => {
-      const cacheKey = generateKey(model.modelId, params);
+      const cacheKey = createCacheKey(model.modelId, params);
+      if (!cacheKey) {
+        return doGenerate();
+      }
       const cachePath = getCachePath(resolvedCacheDir, cacheKey);
 
       if (!forceRefresh) {
@@ -203,7 +245,10 @@ export function createDiskCacheMiddleware(
     },
 
     wrapStream: async ({ doStream, params, model }) => {
-      const cacheKey = generateKey(model.modelId, params);
+      const cacheKey = createCacheKey(model.modelId, params);
+      if (!cacheKey) {
+        return doStream();
+      }
       const cachePath = getCachePath(resolvedCacheDir, cacheKey);
 
       if (!forceRefresh) {
@@ -238,13 +283,13 @@ export function createDiskCacheMiddleware(
             collectedParts.push(chunk);
             controller.enqueue(chunk);
           },
-          flush() {
+          async flush() {
             const finishPart = collectedParts.find((p) => p.type === "finish");
-            if (finishPart && isErrorFinishReason(finishPart.finishReason)) {
+            if (!finishPart || isErrorFinishReason(finishPart.finishReason)) {
               return;
             }
 
-            writeCache(cachePath, {
+            await writeCache(cachePath, {
               type: "stream",
               parts: collectedParts,
               response: result.response,

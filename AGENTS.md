@@ -85,9 +85,14 @@ const mw = extractReasoningMiddleware({
 
 MIT-licensed port of [HugoRCD/evlog `evlog/ai`](https://github.com/HugoRCD/evlog).
 
-**Only intentional code difference vs upstream:** `LanguageModelV3*` → `LanguageModelV4*` and `specificationVersion: "v4"`.
+The port keeps the upstream API shape and full `RequestLogger` surface while intentionally adding:
 
-Everything else matches upstream (including full `RequestLogger` from `evlog`, `state._log!`, telemetry hooks, metadata fields, and the official AI test suite ported to V4 fixtures).
+- `LanguageModelV3*` → `LanguageModelV4*` and `specificationVersion: "v4"`
+- Per-model cumulative cost accounting
+- Immutable public metadata/listener snapshots
+- Stream cancellation and source-error accounting
+
+Telemetry hooks, metadata fields, and the official AI test suite remain aligned with upstream and are extended with V4 robustness fixtures.
 
 ```typescript
 import { createAILogger } from "@ai-sdk-tool/middleware/evlog";
