@@ -1,63 +1,20 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type {
-  LanguageModelV4FinishReason,
-  LanguageModelV4StreamPart,
-  LanguageModelV4Usage,
-} from "@ai-sdk/provider";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearDiskCache,
   createDiskCacheMiddleware,
   getCacheStats,
 } from "./disk-cache";
+import {
+  createFinishReason,
+  createMockModel,
+  createMockParams,
+  createUsage,
+} from "./test-helpers/disk-cache";
 
-const TEST_CACHE_DIR = ".test-ai-cache";
-
-function createMockModel(modelId: string) {
-  return { modelId };
-}
-
-function createMockParams(prompt: string) {
-  return { prompt };
-}
-
-function createUsage(): LanguageModelV4Usage {
-  return {
-    inputTokens: {
-      total: 10,
-      noCache: 10,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-    outputTokens: {
-      total: 5,
-      text: 5,
-      reasoning: 0,
-    },
-  };
-}
-
-function createFinishReason(
-  unified: LanguageModelV4FinishReason["unified"]
-): LanguageModelV4FinishReason {
-  return { unified, raw: unified };
-}
-
-async function collectStream(
-  stream: ReadableStream<LanguageModelV4StreamPart>
-) {
-  const parts: LanguageModelV4StreamPart[] = [];
-  const reader = stream.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-    parts.push(value);
-  }
-  return parts;
-}
+const TEST_CACHE_DIR = ".test-ai-cache-generate";
 
 describe("createDiskCacheMiddleware", () => {
   beforeEach(async () => {
@@ -83,9 +40,13 @@ describe("createDiskCacheMiddleware", () => {
         finishReason: createFinishReason("stop"),
         usage: createUsage(),
         warnings: [],
-        response: {},
-        providerMetadata: {},
-        request: {},
+        response: {
+          id: "response-id",
+          modelId: "response-model",
+          timestamp: new Date("2026-01-02T03:04:05.000Z"),
+        },
+        providerMetadata: { provider: { cached: true } },
+        request: { body: "request-body" },
       };
 
       const doGenerate = () => {
@@ -115,7 +76,10 @@ describe("createDiskCacheMiddleware", () => {
       } as never);
 
       expect(callCount).toBe(1);
-      expect(result2.content).toEqual(mockResult.content);
+      expect(result2).toEqual(mockResult);
+      expect(
+        (result2.response as { timestamp?: unknown })?.timestamp
+      ).toBeInstanceOf(Date);
     });
 
     it("should call model for different params", async () => {
@@ -179,6 +143,35 @@ describe("createDiskCacheMiddleware", () => {
 
       expect(middleware.wrapGenerate).toBeUndefined();
       expect(middleware.wrapStream).toBeUndefined();
+    });
+
+    it("should let an enabled env var override the disabled option", () => {
+      vi.stubEnv("AI_CACHE_ENABLED", "1");
+
+      const middleware = createDiskCacheMiddleware({
+        cacheDir: TEST_CACHE_DIR,
+        enabled: false,
+      });
+
+      expect(middleware.wrapGenerate).toBeDefined();
+      expect(middleware.wrapStream).toBeDefined();
+    });
+
+    it("should expose an identity transform for enabled and disabled modes", async () => {
+      const params = createMockParams("identity");
+      for (const enabled of [true, false]) {
+        const middleware = createDiskCacheMiddleware({
+          cacheDir: TEST_CACHE_DIR,
+          enabled,
+        });
+        const transformParams = middleware.transformParams;
+        expect(transformParams).toBeDefined();
+        if (transformParams) {
+          await expect(transformParams({ params } as never)).resolves.toBe(
+            params
+          );
+        }
+      }
     });
 
     it("should use custom generateKey function", async () => {
@@ -265,8 +258,113 @@ describe("createDiskCacheMiddleware", () => {
       expect(callCount).toBe(2);
     });
 
+    it("should not cache generate results with other finishReason", async () => {
+      const middleware = createDiskCacheMiddleware({
+        cacheDir: TEST_CACHE_DIR,
+      });
+      let callCount = 0;
+      const doGenerate = () => {
+        callCount++;
+        return Promise.resolve({
+          content: [],
+          finishReason: createFinishReason("other"),
+          usage: createUsage(),
+          warnings: [],
+        });
+      };
+      const wrapGenerate = middleware.wrapGenerate;
+      expect(wrapGenerate).toBeDefined();
+      if (!wrapGenerate) {
+        return;
+      }
+
+      for (let i = 0; i < 2; i++) {
+        await wrapGenerate({
+          doGenerate,
+          params: createMockParams("other"),
+          model: createMockModel("test"),
+        } as never);
+      }
+
+      expect(callCount).toBe(2);
+    });
+
+    it("should not break generation when the cache path is unwritable", async () => {
+      writeFileSync(resolve(TEST_CACHE_DIR), "not-a-directory");
+      const middleware = createDiskCacheMiddleware({
+        cacheDir: TEST_CACHE_DIR,
+      });
+      let callCount = 0;
+      const doGenerate = () => {
+        callCount++;
+        return Promise.resolve({
+          content: [],
+          finishReason: createFinishReason("stop"),
+          usage: createUsage(),
+          warnings: [],
+        });
+      };
+      const wrapGenerate = middleware.wrapGenerate;
+      expect(wrapGenerate).toBeDefined();
+      if (!wrapGenerate) {
+        return;
+      }
+
+      for (let i = 0; i < 2; i++) {
+        await expect(
+          wrapGenerate({
+            doGenerate,
+            params: createMockParams("write-failure"),
+            model: createMockModel("test"),
+          } as never)
+        ).resolves.toBeDefined();
+      }
+
+      expect(callCount).toBe(2);
+    });
+
+    it("should emit debug hit and miss diagnostics", async () => {
+      vi.stubEnv("AI_CACHE_DEBUG", "1");
+      const consoleSpy = vi
+        .spyOn(console, "log")
+        .mockImplementation(() => undefined);
+      const middleware = createDiskCacheMiddleware({
+        cacheDir: TEST_CACHE_DIR,
+      });
+      const doGenerate = () =>
+        Promise.resolve({
+          content: [],
+          finishReason: createFinishReason("stop"),
+          usage: createUsage(),
+          warnings: [],
+        });
+      const wrapGenerate = middleware.wrapGenerate;
+      expect(wrapGenerate).toBeDefined();
+      if (!wrapGenerate) {
+        return;
+      }
+
+      for (let i = 0; i < 2; i++) {
+        await wrapGenerate({
+          doGenerate,
+          params: createMockParams("debug"),
+          model: createMockModel("test"),
+        } as never);
+      }
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[ai-cache] MISS generate",
+        expect.any(String)
+      );
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[ai-cache] HIT generate",
+        expect.any(String)
+      );
+    });
+
     it("should recover from malformed cached generate payload", async () => {
-      const cacheKey = "ab-fixed-key";
+      const rawCacheKey = "ab-fixed-key";
+      const cacheKey = createHash("sha256").update(rawCacheKey).digest("hex");
       const cacheSubDir = join(resolve(TEST_CACHE_DIR), cacheKey.slice(0, 2));
       const cachePath = join(cacheSubDir, `${cacheKey}.json`);
       mkdirSync(cacheSubDir, { recursive: true });
@@ -274,7 +372,7 @@ describe("createDiskCacheMiddleware", () => {
 
       const middleware = createDiskCacheMiddleware({
         cacheDir: TEST_CACHE_DIR,
-        generateKey: () => cacheKey,
+        generateKey: () => rawCacheKey,
       });
       const model = createMockModel("test-model");
       const params = createMockParams("MalformedCache");
@@ -311,6 +409,151 @@ describe("createDiskCacheMiddleware", () => {
       } as never);
 
       expect(result1.content).toEqual(result2.content);
+      expect(callCount).toBe(1);
+    });
+
+    it("should ignore a valid JSON payload with an invalid generate schema", async () => {
+      const rawCacheKey = "invalid-generate-schema";
+      const cacheKey = createHash("sha256").update(rawCacheKey).digest("hex");
+      const cacheSubDir = join(resolve(TEST_CACHE_DIR), cacheKey.slice(0, 2));
+      mkdirSync(cacheSubDir, { recursive: true });
+      writeFileSync(
+        join(cacheSubDir, `${cacheKey}.json`),
+        JSON.stringify({ type: "generate" })
+      );
+
+      const middleware = createDiskCacheMiddleware({
+        cacheDir: TEST_CACHE_DIR,
+        generateKey: () => rawCacheKey,
+      });
+      let callCount = 0;
+      const doGenerate = () => {
+        callCount++;
+        return Promise.resolve({
+          content: [],
+          finishReason: createFinishReason("stop"),
+          usage: createUsage(),
+          warnings: [],
+        });
+      };
+      const wrapGenerate = middleware.wrapGenerate;
+      expect(wrapGenerate).toBeDefined();
+      if (!wrapGenerate) {
+        return;
+      }
+
+      await wrapGenerate({
+        doGenerate,
+        params: createMockParams("invalid"),
+        model: createMockModel("test-model"),
+      } as never);
+
+      expect(callCount).toBe(1);
+    });
+
+    it("should bypass caching when default key serialization fails", async () => {
+      const middleware = createDiskCacheMiddleware({
+        cacheDir: TEST_CACHE_DIR,
+      });
+      const params: Record<string, unknown> = { prompt: "circular" };
+      params.self = params;
+      let callCount = 0;
+      const doGenerate = () => {
+        callCount++;
+        return Promise.resolve({
+          content: [],
+          finishReason: createFinishReason("stop"),
+          usage: createUsage(),
+          warnings: [],
+        });
+      };
+      const wrapGenerate = middleware.wrapGenerate;
+      expect(wrapGenerate).toBeDefined();
+      if (!wrapGenerate) {
+        return;
+      }
+
+      await wrapGenerate({
+        doGenerate,
+        params,
+        model: createMockModel("test"),
+      } as never);
+      await wrapGenerate({
+        doGenerate,
+        params,
+        model: createMockModel("test"),
+      } as never);
+
+      expect(callCount).toBe(2);
+      expect(await getCacheStats(TEST_CACHE_DIR)).toEqual({
+        totalFiles: 0,
+        totalSizeBytes: 0,
+        generateCount: 0,
+        streamCount: 0,
+      });
+    });
+
+    it("should make custom cache keys path-safe", async () => {
+      const middleware = createDiskCacheMiddleware({
+        cacheDir: TEST_CACHE_DIR,
+        generateKey: () => "../../outside-cache",
+      });
+      let callCount = 0;
+      const doGenerate = () => {
+        callCount++;
+        return Promise.resolve({
+          content: [],
+          finishReason: createFinishReason("stop"),
+          usage: createUsage(),
+          warnings: [],
+        });
+      };
+      const wrapGenerate = middleware.wrapGenerate;
+      expect(wrapGenerate).toBeDefined();
+      if (!wrapGenerate) {
+        return;
+      }
+
+      for (let i = 0; i < 2; i++) {
+        await wrapGenerate({
+          doGenerate,
+          params: createMockParams("safe"),
+          model: createMockModel("test"),
+        } as never);
+      }
+
+      expect(callCount).toBe(1);
+      expect((await getCacheStats(TEST_CACHE_DIR)).generateCount).toBe(1);
+    });
+
+    it("should serialize functions and regular expressions in default keys", async () => {
+      const middleware = createDiskCacheMiddleware({
+        cacheDir: TEST_CACHE_DIR,
+      });
+      let callCount = 0;
+      const doGenerate = () => {
+        callCount++;
+        return Promise.resolve({
+          content: [],
+          finishReason: createFinishReason("stop"),
+          usage: createUsage(),
+          warnings: [],
+        });
+      };
+      const wrapGenerate = middleware.wrapGenerate;
+      expect(wrapGenerate).toBeDefined();
+      if (!wrapGenerate) {
+        return;
+      }
+
+      for (let i = 0; i < 2; i++) {
+        await wrapGenerate({
+          doGenerate,
+          params: { callback: () => i, pattern: /test/gi },
+          model: createMockModel("test"),
+        } as never);
+      }
+
       expect(callCount).toBe(1);
     });
 
@@ -413,7 +656,7 @@ describe("createDiskCacheMiddleware", () => {
       } as never);
       expect(callCount).toBe(1);
 
-      vi.stubEnv("AI_CACHE_FORCE_REFRESH", "true");
+      vi.stubEnv("AI_CACHE_FORCE_REFRESH", "1");
       const forceRefreshMiddleware = createDiskCacheMiddleware({
         cacheDir: TEST_CACHE_DIR,
       });
@@ -430,212 +673,5 @@ describe("createDiskCacheMiddleware", () => {
       } as never);
       expect(callCount).toBe(2);
     });
-  });
-
-  describe("wrapStream", () => {
-    it("should cache stream results on first call", async () => {
-      const middleware = createDiskCacheMiddleware({
-        cacheDir: TEST_CACHE_DIR,
-      });
-      const model = createMockModel("test-model");
-      const params = createMockParams("Stream test");
-      let callCount = 0;
-
-      const mockParts = [
-        { type: "text-start", id: "t1" },
-        { type: "text-delta", id: "t1", delta: "Hello" },
-        { type: "text-delta", id: "t1", delta: " World" },
-        { type: "text-end", id: "t1" },
-        {
-          type: "finish",
-          finishReason: createFinishReason("stop"),
-          usage: createUsage(),
-        },
-      ] as LanguageModelV4StreamPart[];
-
-      const doStream = () => {
-        callCount++;
-        return Promise.resolve({
-          stream: new ReadableStream<LanguageModelV4StreamPart>({
-            start(controller) {
-              for (const part of mockParts) {
-                controller.enqueue(part);
-              }
-              controller.close();
-            },
-          }),
-          response: {},
-          request: {},
-        });
-      };
-
-      const wrapStream = middleware.wrapStream;
-      expect(wrapStream).toBeDefined();
-      if (!wrapStream) {
-        return;
-      }
-
-      const result1 = await wrapStream({
-        doStream,
-        params,
-        model,
-      } as never);
-      const parts1 = await collectStream(result1.stream);
-
-      expect(callCount).toBe(1);
-      expect(parts1).toHaveLength(5);
-
-      await new Promise((r) => setTimeout(r, 50));
-
-      const result2 = await wrapStream({
-        doStream,
-        params,
-        model,
-      } as never);
-      const parts2 = await collectStream(result2.stream);
-
-      expect(callCount).toBe(1);
-      expect(parts2).toEqual(parts1);
-    });
-
-    it("should not cache stream results when finishReason is error", async () => {
-      const middleware = createDiskCacheMiddleware({
-        cacheDir: TEST_CACHE_DIR,
-      });
-      const model = createMockModel("test-model");
-      const params = createMockParams("StreamError");
-      let callCount = 0;
-
-      const mockParts = [
-        { type: "text-start", id: "t1" },
-        { type: "text-delta", id: "t1", delta: "partial" },
-        { type: "text-end", id: "t1" },
-        {
-          type: "finish",
-          finishReason: createFinishReason("error"),
-          usage: createUsage(),
-        },
-      ] as LanguageModelV4StreamPart[];
-
-      const doStream = () => {
-        callCount++;
-        return Promise.resolve({
-          stream: new ReadableStream<LanguageModelV4StreamPart>({
-            start(controller) {
-              for (const part of mockParts) {
-                controller.enqueue(part);
-              }
-              controller.close();
-            },
-          }),
-          response: {},
-          request: {},
-        });
-      };
-
-      const wrapStream = middleware.wrapStream;
-      expect(wrapStream).toBeDefined();
-      if (!wrapStream) {
-        return;
-      }
-
-      const result1 = await wrapStream({
-        doStream,
-        params,
-        model,
-      } as never);
-      const parts1 = await collectStream(result1.stream);
-
-      const result2 = await wrapStream({
-        doStream,
-        params,
-        model,
-      } as never);
-      const parts2 = await collectStream(result2.stream);
-
-      expect(parts1).toEqual(parts2);
-      expect(callCount).toBe(2);
-    });
-  });
-});
-
-describe("clearDiskCache", () => {
-  it("should remove cache directory", async () => {
-    const cacheDir = ".test-clear-cache";
-    mkdirSync(resolve(cacheDir), { recursive: true });
-    writeFileSync(join(resolve(cacheDir), "test.json"), "{}");
-
-    expect(existsSync(resolve(cacheDir))).toBe(true);
-
-    await clearDiskCache(cacheDir);
-
-    expect(existsSync(resolve(cacheDir))).toBe(false);
-  });
-
-  it("should not throw for non-existent directory", async () => {
-    await expect(
-      clearDiskCache(".non-existent-cache-dir")
-    ).resolves.not.toThrow();
-  });
-});
-
-describe("getCacheStats", () => {
-  const STATS_CACHE_DIR = ".test-stats-cache";
-
-  beforeEach(async () => {
-    await clearDiskCache(STATS_CACHE_DIR);
-  });
-
-  afterEach(async () => {
-    await clearDiskCache(STATS_CACHE_DIR);
-  });
-
-  it("should return zeros for empty cache", async () => {
-    const stats = await getCacheStats(STATS_CACHE_DIR);
-    expect(stats).toEqual({
-      totalFiles: 0,
-      totalSizeBytes: 0,
-      generateCount: 0,
-      streamCount: 0,
-    });
-  });
-
-  it("should count cached files correctly", async () => {
-    const cacheDir = resolve(STATS_CACHE_DIR);
-    const subDir = join(cacheDir, "ab");
-    mkdirSync(subDir, { recursive: true });
-
-    writeFileSync(
-      join(subDir, "abc123.json"),
-      JSON.stringify({ type: "generate", content: [] })
-    );
-    writeFileSync(
-      join(subDir, "def456.json"),
-      JSON.stringify({ type: "stream", parts: [] })
-    );
-
-    const stats = await getCacheStats(STATS_CACHE_DIR);
-    expect(stats.totalFiles).toBe(2);
-    expect(stats.generateCount).toBe(1);
-    expect(stats.streamCount).toBe(1);
-    expect(stats.totalSizeBytes).toBeGreaterThan(0);
-  });
-
-  it("should skip malformed json files when counting cache types", async () => {
-    const cacheDir = resolve(STATS_CACHE_DIR);
-    const subDir = join(cacheDir, "cd");
-    mkdirSync(subDir, { recursive: true });
-
-    writeFileSync(
-      join(subDir, "valid.json"),
-      JSON.stringify({ type: "generate", content: [] })
-    );
-    writeFileSync(join(subDir, "broken.json"), "{");
-
-    const stats = await getCacheStats(STATS_CACHE_DIR);
-    expect(stats.totalFiles).toBe(2);
-    expect(stats.generateCount).toBe(1);
-    expect(stats.streamCount).toBe(0);
-    expect(stats.totalSizeBytes).toBeGreaterThan(0);
   });
 });

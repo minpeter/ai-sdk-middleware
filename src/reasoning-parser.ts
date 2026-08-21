@@ -42,6 +42,10 @@ export function getPotentialStartIndex(
   return null;
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Extract an XML-tagged reasoning section from the generated text and exposes it
  * as a `reasoning` property on the result.
@@ -62,6 +66,10 @@ export function extractReasoningMiddleware({
   separator?: string;
   startWithReasoning?: boolean;
 }): LanguageModelV4Middleware {
+  if (openingTag.length === 0 || closingTag.length === 0) {
+    throw new Error("Reasoning tags must not be empty");
+  }
+
   return {
     specificationVersion: "v4",
     wrapGenerate: async ({ doGenerate }) => {
@@ -75,7 +83,10 @@ export function extractReasoningMiddleware({
         }
 
         const text = startWithReasoning ? openingTag + part.text : part.text;
-        const regexp = new RegExp(`${openingTag}(.*?)${closingTag}`, "gs");
+        const regexp = new RegExp(
+          `${escapeRegExp(openingTag)}(.*?)${escapeRegExp(closingTag)}`,
+          "gs"
+        );
         const matches = Array.from(text.matchAll(regexp));
 
         if (!matches.length) {
@@ -121,15 +132,98 @@ export function extractReasoningMiddleware({
       interface ExtractionState {
         afterSwitch: boolean;
         buffer: string;
-        idCounter: number;
         isFirstReasoning: boolean;
         isFirstText: boolean;
         isReasoning: boolean;
+        reasoningId?: string;
         textId: string;
       }
 
       const reasoningExtractions: Record<string, ExtractionState> = {};
-      let delayedTextStart: LanguageModelV4StreamPart | undefined;
+      const delayedTextStarts = new Map<string, LanguageModelV4StreamPart>();
+      let reasoningIdCounter = 0;
+
+      function getReasoningId(activeExtraction: ExtractionState): string {
+        activeExtraction.reasoningId ??= `reasoning-${reasoningIdCounter++}`;
+        return activeExtraction.reasoningId;
+      }
+
+      function publish(
+        activeExtraction: ExtractionState,
+        controller: TransformStreamDefaultController<LanguageModelV4StreamPart>,
+        text: string
+      ) {
+        if (text.length === 0) {
+          return;
+        }
+
+        const prefix =
+          activeExtraction.afterSwitch &&
+          (activeExtraction.isReasoning
+            ? !activeExtraction.isFirstReasoning
+            : !activeExtraction.isFirstText)
+            ? separator
+            : "";
+
+        if (
+          activeExtraction.isReasoning &&
+          (activeExtraction.afterSwitch || activeExtraction.isFirstReasoning)
+        ) {
+          controller.enqueue({
+            type: "reasoning-start",
+            id: getReasoningId(activeExtraction),
+          });
+        }
+
+        if (activeExtraction.isReasoning) {
+          controller.enqueue({
+            type: "reasoning-delta",
+            delta: prefix + text,
+            id: getReasoningId(activeExtraction),
+          });
+        } else {
+          const delayedTextStart = delayedTextStarts.get(
+            activeExtraction.textId
+          );
+          if (delayedTextStart) {
+            controller.enqueue(delayedTextStart);
+            delayedTextStarts.delete(activeExtraction.textId);
+          }
+          controller.enqueue({
+            type: "text-delta",
+            delta: prefix + text,
+            id: activeExtraction.textId,
+          });
+        }
+
+        activeExtraction.afterSwitch = false;
+
+        if (activeExtraction.isReasoning) {
+          activeExtraction.isFirstReasoning = false;
+        } else {
+          activeExtraction.isFirstText = false;
+        }
+      }
+
+      function flushExtraction(
+        activeExtraction: ExtractionState,
+        controller: TransformStreamDefaultController<LanguageModelV4StreamPart>
+      ) {
+        publish(activeExtraction, controller, activeExtraction.buffer);
+        activeExtraction.buffer = "";
+      }
+
+      function flushAll(
+        controller: TransformStreamDefaultController<LanguageModelV4StreamPart>
+      ) {
+        for (const activeExtraction of Object.values(reasoningExtractions)) {
+          flushExtraction(activeExtraction, controller);
+        }
+        for (const delayedTextStart of delayedTextStarts.values()) {
+          controller.enqueue(delayedTextStart);
+        }
+        delayedTextStarts.clear();
+      }
 
       return {
         stream: stream.pipeThrough(
@@ -141,13 +235,28 @@ export function extractReasoningMiddleware({
               // Do not send `text-start` before `reasoning-start`
               // https://github.com/vercel/ai/issues/7774
               if (chunk.type === "text-start") {
-                delayedTextStart = chunk;
+                delayedTextStarts.set(chunk.id, chunk);
                 return;
               }
 
-              if (chunk.type === "text-end" && delayedTextStart) {
-                controller.enqueue(delayedTextStart);
-                delayedTextStart = undefined;
+              if (chunk.type === "text-end") {
+                const activeExtraction = reasoningExtractions[chunk.id];
+                if (activeExtraction) {
+                  flushExtraction(activeExtraction, controller);
+                }
+                const delayedTextStart = delayedTextStarts.get(chunk.id);
+                if (delayedTextStart) {
+                  controller.enqueue(delayedTextStart);
+                  delayedTextStarts.delete(chunk.id);
+                }
+                controller.enqueue(chunk);
+                return;
+              }
+
+              if (chunk.type === "finish" || chunk.type === "error") {
+                flushAll(controller);
+                controller.enqueue(chunk);
+                return;
               }
 
               if (chunk.type !== "text-delta") {
@@ -162,64 +271,12 @@ export function extractReasoningMiddleware({
                   afterSwitch: false,
                   isReasoning: startWithReasoning,
                   buffer: "",
-                  idCounter: 0,
                   textId: chunk.id,
                 };
               }
 
               const activeExtraction = reasoningExtractions[chunk.id];
               activeExtraction.buffer += chunk.delta;
-
-              function publish(text: string) {
-                if (text.length === 0) {
-                  return;
-                }
-
-                const prefix =
-                  activeExtraction.afterSwitch &&
-                  (activeExtraction.isReasoning
-                    ? !activeExtraction.isFirstReasoning
-                    : !activeExtraction.isFirstText)
-                    ? separator
-                    : "";
-
-                if (
-                  activeExtraction.isReasoning &&
-                  (activeExtraction.afterSwitch ||
-                    activeExtraction.isFirstReasoning)
-                ) {
-                  controller.enqueue({
-                    type: "reasoning-start",
-                    id: `reasoning-${activeExtraction.idCounter}`,
-                  });
-                }
-
-                if (activeExtraction.isReasoning) {
-                  controller.enqueue({
-                    type: "reasoning-delta",
-                    delta: prefix + text,
-                    id: `reasoning-${activeExtraction.idCounter}`,
-                  });
-                } else {
-                  if (delayedTextStart) {
-                    controller.enqueue(delayedTextStart);
-                    delayedTextStart = undefined;
-                  }
-                  controller.enqueue({
-                    type: "text-delta",
-                    delta: prefix + text,
-                    id: activeExtraction.textId,
-                  });
-                }
-
-                activeExtraction.afterSwitch = false;
-
-                if (activeExtraction.isReasoning) {
-                  activeExtraction.isFirstReasoning = false;
-                } else {
-                  activeExtraction.isFirstText = false;
-                }
-              }
 
               do {
                 const nextTag = activeExtraction.isReasoning
@@ -232,12 +289,20 @@ export function extractReasoningMiddleware({
                 );
 
                 if (startIndex == null) {
-                  publish(activeExtraction.buffer);
+                  publish(
+                    activeExtraction,
+                    controller,
+                    activeExtraction.buffer
+                  );
                   activeExtraction.buffer = "";
                   break;
                 }
 
-                publish(activeExtraction.buffer.slice(0, startIndex));
+                publish(
+                  activeExtraction,
+                  controller,
+                  activeExtraction.buffer.slice(0, startIndex)
+                );
 
                 const foundFullMatch =
                   startIndex + nextTag.length <= activeExtraction.buffer.length;
@@ -252,15 +317,15 @@ export function extractReasoningMiddleware({
                     if (activeExtraction.isFirstReasoning) {
                       controller.enqueue({
                         type: "reasoning-start",
-                        id: `reasoning-${activeExtraction.idCounter}`,
+                        id: getReasoningId(activeExtraction),
                       });
                     }
 
                     controller.enqueue({
                       type: "reasoning-end",
-                      id: `reasoning-${activeExtraction.idCounter}`,
+                      id: getReasoningId(activeExtraction),
                     });
-                    activeExtraction.idCounter += 1;
+                    activeExtraction.reasoningId = undefined;
                   }
 
                   activeExtraction.isReasoning = !activeExtraction.isReasoning;
@@ -271,6 +336,9 @@ export function extractReasoningMiddleware({
                   break;
                 }
               } while (true);
+            },
+            flush: (controller) => {
+              flushAll(controller);
             },
           })
         ),

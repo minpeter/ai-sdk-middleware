@@ -22,7 +22,14 @@ export default defineConfig({
       reportsDirectory: "./coverage",
       clean: true,
       include: ["src/**/*.ts"],
-      exclude: ["**/*.test.ts{,x}", "**/*.d.ts"],
+      exclude: ["**/*.test.ts{,x}", "**/*.d.ts", "src/test-helpers/**"],
+      thresholds: {
+        perFile: true,
+        statements: 80,
+        branches: 70,
+        functions: 80,
+        lines: 80,
+      },
     },
   },
 });
